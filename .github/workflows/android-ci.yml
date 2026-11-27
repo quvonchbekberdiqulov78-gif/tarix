@@ -1,0 +1,32 @@
+name: NEURON Android CI
+
+on:
+  push:
+    branches: [android-apk]
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/**"
+      - "main.py"
+      - "miniapp.html"
+      - ".github/workflows/android-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax
+        run: python -m py_compile main.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Compile Android debug APK
+        run: gradle -p android assembleDebug -PNEURON_BASE_URL="https://ci.invalid"

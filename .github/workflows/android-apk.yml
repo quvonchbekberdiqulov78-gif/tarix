@@ -1,0 +1,108 @@
+name: Build NEURON Android APK
+
+on:
+  push:
+    branches:
+      - android-apk
+  workflow_dispatch:
+    inputs:
+      neuron_base_url:
+        description: "NEURON Render server URL (HTTPS root, without /app)"
+        required: true
+        type: string
+        default: "https://neuron-v2.onrender.com"
+      build_type:
+        description: "Debug is for testing; Release requires the permanent signing key secrets"
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: debug
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NEURON_BASE_URL: ${{ inputs.neuron_base_url || 'https://neuron-v2.onrender.com' }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout isolated Android branch
+        uses: actions/checkout@v4
+        with:
+          ref: android-apk
+
+      - name: Validate HTTPS server URL
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          value = os.environ["NEURON_BASE_URL"].strip()
+          parsed = urlparse(value)
+          if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.username or parsed.password:
+              raise SystemExit("Enter only the HTTPS server root, for example https://your-service.onrender.com")
+          PY
+
+      - name: Check backend Python syntax
+        run: python -m py_compile main.py
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Prepare permanent Android signing key
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_type == 'release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/release.keystore
+          test -s android/release.keystore
+          echo "ANDROID_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        if: ${{ github.event_name == 'push' || inputs.build_type == 'debug' }}
+        run: gradle -p android assembleDebug -PNEURON_BASE_URL="$NEURON_BASE_URL" -PVERSION_CODE="$GITHUB_RUN_NUMBER" -PVERSION_NAME="1.0.$GITHUB_RUN_NUMBER"
+
+      - name: Build signed release APK
+        if: ${{ inputs.build_type == 'release' }}
+        run: gradle -p android assembleRelease -PNEURON_BASE_URL="$NEURON_BASE_URL" -PVERSION_CODE="$GITHUB_RUN_NUMBER" -PVERSION_NAME="1.0.$GITHUB_RUN_NUMBER"
+
+      - name: Remove temporary signing key
+        if: ${{ always() && inputs.build_type == 'release' }}
+        run: rm -f android/release.keystore
+
+      - name: Upload debug APK
+        if: ${{ github.event_name == 'push' || inputs.build_type == 'debug' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEURON-Android-Debug-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload signed release APK
+        if: ${{ inputs.build_type == 'release' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEURON-Android-Release-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
