@@ -36,7 +36,7 @@ jobs:
       - name: Checkout isolated Android branch
         uses: actions/checkout@v4
         with:
-          ref: android-apk
+          ref: ${{ github.ref }}
 
       - name: Validate HTTPS server URL
         shell: bash
